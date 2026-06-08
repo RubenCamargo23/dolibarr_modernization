@@ -21,7 +21,7 @@ if [ "${HOST_GROUP_ID}" == "" ]; then
 fi
 
 usermod -u "${HOST_USER_ID}" www-data
-groupmod -g "${HOST_GROUP_ID}" www-data
+groupmod -g "${HOST_GROUP_ID}" www-data || true
 
 echo "[docker-run] => update '${PHP_INI_DIR}/conf.d/dolibarr-php.ini'"
 cat <<EOF > "${PHP_INI_DIR}/conf.d/dolibarr-php.ini"
