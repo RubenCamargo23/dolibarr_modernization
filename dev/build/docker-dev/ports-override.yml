@@ -1,0 +1,8 @@
+---
+services:
+    mariadb:
+        ports: !override
+            - "3307:3306"
+    phpmyadmin:
+        ports: !override
+            - "8090:80"
