@@ -531,7 +531,90 @@ if ($num == 1 && getDolGlobalString('MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE') && $s
 // Output page
 // --------------------------------------------------------------------
 
-llxHeader('', $title, $help_url, '', 0, 0, $morejs, $morecss, '', 'mod-ticket page-list bodyforlist');
+// classforhorizontalscrolloftabs makes wide tables scroll within their own
+// div-table-responsive instead of forcing the whole page to overflow
+// horizontally (the table's #id-right cell would otherwise stretch to fit
+// its widest child, pushing <html> past the viewport). Other Dolibarr
+// list pages (product/list.php, adherents/list.php, etc.) already pass
+// this; ticket/list.php never did, even before any local changes.
+llxHeader('', $title, $help_url, '', 0, 0, $morejs, $morecss, '', 'mod-ticket page-list bodyforlist classforhorizontalscrolloftabs');
+
+// Modernization experiment: tickets created through the standalone Tickets
+// microservice live in its own Postgres DB, not llx_ticket, so they can't
+// be merged into the SQL-driven table below (extrafields, kanban, mass
+// selection, etc. all assume a real llx_ticket row). Shown here as its own
+// titled block, using the same fiche wrapper as the rest of the page so it
+// doesn't break the layout.
+//
+// Unlike card.php's create flow, this list is fetched directly from the
+// browser via JS (not server-side PHP+getURLContent) so the request is
+// visible in the browser's Network tab, hitting the microservice's own
+// exposed port directly (no load balancer in this local setup — see
+// ticketsmicroserviceclient.class.php for the PHP-side client still used
+// by card.php's create/view flows).
+print load_fiche_titre('Tickets (Tickets Service)', '', 'ticket');
+print '<div class="fichecenter">';
+print '<div class="div-table-responsive-no-min">';
+print '<table class="noborder centpercent" id="ms-tickets-table">';
+print '<tr class="liste_titre">';
+print '<td>Ref</td><td>'.$langs->trans('Subject').'</td><td>'.$langs->trans('Status').'</td><td>'.$langs->trans('DateCreation').'</td>';
+print '</tr>';
+print '<tr id="ms-tickets-loading"><td colspan="4">'.$langs->trans('Loading').'...</td></tr>';
+print '</table>';
+print '</div>';
+print '</div>';
+print '<br>';
+// URL comes from the TICKETS_MICROSERVICE_URL_PUBLIC env var
+// (dev/build/docker-dev/.env), not hardcoded.
+$msPublicUrl = getenv('TICKETS_MICROSERVICE_URL_PUBLIC') ?: 'http://localhost:8001/api';
+?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+	fetch('<?php echo dol_escape_js($msPublicUrl); ?>/tickets', {headers: {'Accept': 'application/json'}})
+		.then(function (response) {
+			if (!response.ok) {
+				throw new Error('HTTP ' + response.status);
+			}
+			return response.json();
+		})
+		.then(function (tickets) {
+			var table = document.getElementById('ms-tickets-table');
+			var loadingRow = document.getElementById('ms-tickets-loading');
+			loadingRow.remove();
+
+			if (!tickets.length) {
+				var emptyRow = table.insertRow();
+				var emptyCell = emptyRow.insertCell();
+				emptyCell.colSpan = 4;
+				emptyCell.textContent = '<?php echo dol_escape_js($langs->trans('NoRecordFound')); ?>';
+				return;
+			}
+
+			tickets.forEach(function (ticket) {
+				var row = table.insertRow();
+				row.className = 'oddeven';
+
+				var refCell = row.insertCell();
+				var link = document.createElement('a');
+				link.href = '<?php echo DOL_URL_ROOT; ?>/ticket/card.php?track_id=' + encodeURIComponent(ticket.ref);
+				link.textContent = ticket.ref;
+				refCell.appendChild(link);
+
+				row.insertCell().textContent = ticket.subject;
+				row.insertCell().textContent = ticket.status;
+				row.insertCell().textContent = ticket.created_at ? new Date(ticket.created_at).toLocaleString() : '';
+			});
+		})
+		.catch(function (err) {
+			var table = document.getElementById('ms-tickets-table');
+			var loadingRow = document.getElementById('ms-tickets-loading');
+			loadingRow.cells[0].colSpan = 4;
+			loadingRow.cells[0].className = 'error';
+			loadingRow.cells[0].textContent = 'Tickets microservice error: ' + err.message;
+		});
+});
+</script>
+<?php
 
 if ($socid && !$projectid && !$project_ref && $user->hasRight('societe', 'lire')) {
 	$socstat = new Societe($db);

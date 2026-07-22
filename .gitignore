@@ -48,6 +48,9 @@ dev/build/yarn-error.log
 dev/build/node_modules/
 node_modules/
 
+# Local Docker dev env (tickets microservice URLs, etc.)
+dev/build/docker-dev/.env
+
 vendor/
 php-vendor
 tmp/

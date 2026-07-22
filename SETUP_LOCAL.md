@@ -22,7 +22,7 @@ Guía paso a paso para correr el proyecto en tu máquina usando Docker.
 
 **macOS / Linux / WSL 2 (Windows):**
 ```bash
-git clone <url-del-repo> dolibarr_modernization
+git clone --depth 1 <url-del-repo> dolibarr_modernization
 cd dolibarr_modernization
 ```
 
@@ -107,6 +107,16 @@ cd dev/build/docker-dev
 ```powershell
 cd dev\build\docker-dev
 ```
+
+Copia el archivo de variables de entorno para la integración con el
+microservicio de Tickets (ver `htdocs/ticket/class/ticketsmicroserviceclient.class.php`):
+
+```bash
+cp .env.example .env
+```
+
+> Los valores por defecto funcionan para el setup local descrito en esta
+> guía. Este `.env` está en `.gitignore` — no se sube al repositorio.
 
 Construye las imágenes y levanta todos los servicios en segundo plano:
 

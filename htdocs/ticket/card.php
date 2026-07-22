@@ -127,10 +127,31 @@ if (GETPOST('modelselected', 'alpha')) {
 //include DOL_DOCUMENT_ROOT.'/core/actions_fetchobject.inc.php';  // Must be 'include', not 'include_once'. Include fetch and fetch_thirdparty but not fetch_optionals
 $res = 0;
 if ($id || $track_id || $ref) {
-	$res = $object->fetch($id, $ref, $track_id);
-	if ($res >= 0) {
-		$id = $object->id;
-		$track_id = $object->track_id;
+	// Modernization experiment: refs shaped like TCK-YYMM-{id} were created
+	// by the standalone Tickets microservice and live in its own Postgres
+	// DB, not llx_ticket — fetch them from there instead. See
+	// ticketsmicroserviceclient.class.php for the scope/limitations of
+	// this integration (create/list/view only).
+	if ($track_id && preg_match('/^TCK-\d{4}-(\d+)$/', $track_id, $matches)) {
+		require_once DOL_DOCUMENT_ROOT.'/ticket/class/ticketsmicroserviceclient.class.php';
+		$msClient = new TicketsMicroserviceClient();
+		$msTicket = $msClient->getTicket((int) $matches[1]);
+
+		if ($msTicket === -1) {
+			$res = -1;
+			$object->error = $msClient->error;
+		} else {
+			$msClient->hydrateTicketObject($object, $msTicket);
+			$res = 1;
+			$id = $object->id;
+			$track_id = $object->track_id;
+		}
+	} else {
+		$res = $object->fetch($id, $ref, $track_id);
+		if ($res >= 0) {
+			$id = $object->id;
+			$track_id = $object->track_id;
+		}
 	}
 }
 
@@ -274,17 +295,25 @@ if (empty($reshook)) {
 			}
 
 			if ($action == 'add') {		// Test on permission already done
-				$object->type_code = GETPOST("type_code", 'alpha');
-				$object->type_label = $langs->trans($langs->getLabelFromKey($db, $object->type_code, 'c_ticket_type', 'code', 'label'));
-				$object->category_label = $langs->trans($langs->getLabelFromKey($db, $object->category_code, 'c_ticket_category', 'code', 'label'));
-				$object->severity_label = $langs->trans($langs->getLabelFromKey($db, $object->severity_code, 'c_ticket_severity', 'code', 'label'));
-				$object->fk_user_create = $user->id;
-				$object->email_from = $user->email;
-				$object->origin_email = null;
-				$notifyTiers = GETPOST("notify_tiers_at_create", 'alpha');
-				$object->notify_tiers_at_create = empty($notifyTiers) ? 0 : 1;
-				$object->context['contact_id'] = GETPOSTINT('contactid');
-				$id = $object->create($user);
+				// Modernization experiment: ticket creation is delegated to
+				// the standalone Tickets microservice (its own Postgres DB)
+				// instead of $object->create(). Only subject/message are
+				// sent — extrafields, contacts, project linking, auto-assign
+				// and attachments below assume a real llx_ticket row and are
+				// intentionally skipped for microservice-created tickets
+				// (out of scope for this experiment; see
+				// ticketsmicroserviceclient.class.php).
+				require_once DOL_DOCUMENT_ROOT.'/ticket/class/ticketsmicroserviceclient.class.php';
+				$msClient = new TicketsMicroserviceClient();
+				$msTicket = $msClient->createTicket(GETPOST('subject', 'alpha'), GETPOST('message', 'restricthtml'));
+
+				if ($msTicket === -1) {
+					$id = -1;
+					$object->error = $msClient->error;
+				} else {
+					$msClient->hydrateTicketObject($object, $msTicket);
+					$id = $object->id;
+				}
 			} else {
 				$id = $object->update($user);
 			}
@@ -295,52 +324,10 @@ if (empty($reshook)) {
 				$action = $ifErrorAction;
 			}
 
-			if (!$error) {
+			if (!$error && $action != 'add') {
 				// Category association
 				$categories = GETPOST('categories', 'array:int');
 				$object->setCategories($categories);
-			}
-
-			if ($action == 'add') {		// Test on permission already done
-				if (!$error) {
-					// Add contact
-					$contactid = GETPOSTINT('contactid');
-					$type_contact = GETPOST("type", 'alpha');
-
-					if ($contactid > 0 && $type_contact) {
-						$typeid = (GETPOST('typecontact') ? GETPOST('typecontact') : GETPOST('type'));
-						$result = $object->add_contact($contactid, $typeid, 'external');
-					}
-
-					// Link ticket to project
-					if (GETPOST('origin', 'alpha') == 'projet') {
-						$projectid = GETPOSTINT('originid');
-					} else {
-						$projectid = GETPOSTINT('projectid');
-					}
-
-					if ($projectid > 0) {
-						$object->setProject($projectid);
-					}
-
-					// Auto mark as read if created from backend
-					if (getDolGlobalString('TICKET_AUTO_READ_WHEN_CREATED_FROM_BACKEND') && $permissiontomanage) {
-						if (!$object->markAsRead($user) > 0) {
-							setEventMessages($object->error, $object->errors, 'errors');
-						}
-					}
-
-					// Auto assign user
-					if ((empty($fk_user_assign) && getDolGlobalInt('TICKET_AUTO_ASSIGN_USER_CREATE') == 1) || (getDolGlobalInt('TICKET_AUTO_ASSIGN_USER_CREATE') == 2)) {
-						$result = $object->assignUser($user, $user->id, 1);
-						$object->add_contact($user->id, "SUPPORTTEC", 'internal');
-					}
-				}
-
-				if (!$error) {
-					// File transfer
-					$object->copyFilesForTicket('');        // trackid is forced to '' because files were uploaded when no id for ticket exists yet and trackid was ''
-				}
 			}
 			if (!$error) {
 				$db->commit();
@@ -739,7 +726,10 @@ $help_url = 'EN:Module_Ticket|FR:DocumentationModuleTicket';
 
 $title = $actionobject->getTitle($action, $object);
 
-llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-ticket page-card');
+// See list.php for why classforhorizontalscrolloftabs is added here too
+// (keeps wide tables like the message/agenda history scrolling within
+// themselves instead of overflowing the whole page horizontally).
+llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-ticket page-card classforhorizontalscrolloftabs');
 
 if ($action == 'create' || $action == 'presend') {
 	if (empty($permissiontoadd)) {
@@ -777,6 +767,57 @@ if ($action == 'create' || $action == 'presend') {
 	$formticket->showForm(1, 'create', 0, null, $action, $object);
 
 	print dol_get_fiche_end();
+	// Modernization experiment: intercept this form's submit and POST
+	// directly to the Tickets microservice from the browser (visible in
+	// the Network tab), instead of going through PHP's
+	// TicketsMicroserviceClient (getURLContent, server-side, invisible to
+	// the browser). No load balancer in this local setup, so this calls
+	// the microservice's exposed port directly. URL comes from the
+	// TICKETS_MICROSERVICE_URL_PUBLIC env var (dev/build/docker-dev/.env),
+	// not hardcoded — see ticketsmicroserviceclient.class.php for the
+	// server-side counterpart (TICKETS_MICROSERVICE_URL_INTERNAL).
+	$msPublicUrl = getenv('TICKETS_MICROSERVICE_URL_PUBLIC') ?: 'http://localhost:8001/api';
+	?>
+	<script>
+	document.addEventListener('DOMContentLoaded', function () {
+		var form = document.getElementById('form_create_ticket');
+		if (!form) {
+			return;
+		}
+		form.addEventListener('submit', function (e) {
+			if (e.submitter && e.submitter.name === 'cancel') {
+				return; // let the Cancel button submit normally
+			}
+			e.preventDefault();
+
+			var subjectEl = form.querySelector('#subject');
+			var messageEl = form.querySelector('#message, textarea[name="message"]');
+			var subject = subjectEl ? subjectEl.value : '';
+			var message = messageEl ? messageEl.value : '';
+
+			fetch('<?php echo dol_escape_js($msPublicUrl); ?>/tickets', {
+				method: 'POST',
+				headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+				body: JSON.stringify({subject: subject, message: message})
+			})
+				.then(function (response) {
+					return response.json().then(function (data) {
+						if (!response.ok) {
+							throw new Error(data.message || ('HTTP ' + response.status));
+						}
+						return data;
+					});
+				})
+				.then(function (ticket) {
+					window.location.href = '<?php echo DOL_URL_ROOT; ?>/ticket/card.php?track_id=' + encodeURIComponent(ticket.ref);
+				})
+				.catch(function (err) {
+					alert('Tickets microservice error: ' + err.message);
+				});
+		});
+	});
+	</script>
+	<?php
 } elseif ($action == 'edit' && $permissiontoadd && $object->status < Ticket::STATUS_CLOSED) {
 	if (empty($permissiontoadd)) {
 		accessforbidden('NotEnoughPermissions', 0, 1);

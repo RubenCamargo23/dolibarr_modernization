@@ -23,6 +23,9 @@ services:
             HOST_GROUP_ID: $HOST_GROUP_ID
             PHP_INI_DATE_TIMEZONE: $PHP_INI_DATE_TIMEZONE
             PHP_INI_MEMORY_LIMIT: $PHP_INI_MEMORY_LIMIT
+            # From .env in this directory — see htdocs/ticket/class/ticketsmicroserviceclient.class.php
+            TICKETS_MICROSERVICE_URL_INTERNAL: $TICKETS_MICROSERVICE_URL_INTERNAL
+            TICKETS_MICROSERVICE_URL_PUBLIC: $TICKETS_MICROSERVICE_URL_PUBLIC
         volumes:
             - ../../../htdocs:/var/www/html/
             - ../../../documents:/var/www/documents
@@ -46,3 +49,55 @@ services:
         networks:
             - internal-pod
             - external-pod
+
+    # Tickets Service's own database — independent from Dolibarr's mariadb,
+    # per the target architecture (Aurora RDS/PostgreSQL in the diagram).
+    tickets-db:
+        image: postgres:16-alpine
+        environment:
+            POSTGRES_DB: tickets
+            POSTGRES_USER: tickets
+            POSTGRES_PASSWORD: ticketspassfordev
+        ports:
+            - "5433:5432"
+        volumes:
+            - tickets-db-data:/var/lib/postgresql/data
+        networks:
+            - external-pod
+
+    tickets-microservice:
+        image: composer:2
+        container_name: tickets-microservice
+        working_dir: /app
+        volumes:
+            - ../../../../tickets-microservice:/app
+        # composer:2 is a plain PHP-CLI image without pdo_pgsql, so it's
+        # installed here before running migrations. Then installs deps and
+        # serves the app with Artisan's dev server. PHP_CLI_SERVER_WORKERS=10
+        # matches the 10 JMeter threads used in load tests, so this dev
+        # server itself isn't the bottleneck (its default of 1 worker
+        # serializes all requests). --no-reload is required for artisan
+        # serve to actually honor that env var, per its own startup warning
+        # otherwise.
+        command: >
+            sh -c "apk add --no-cache postgresql-dev &&
+                   docker-php-ext-install pdo_pgsql &&
+                   composer install --no-interaction &&
+                   php artisan migrate --force &&
+                   PHP_CLI_SERVER_WORKERS=10 php artisan serve --host=0.0.0.0 --port=8000 --no-reload"
+        environment:
+            DB_CONNECTION: pgsql
+            DB_HOST: tickets-db
+            DB_PORT: 5432
+            DB_DATABASE: tickets
+            DB_USERNAME: tickets
+            DB_PASSWORD: ticketspassfordev
+        ports:
+            - "8001:8000"
+        depends_on:
+            - tickets-db
+        networks:
+            - external-pod
+
+volumes:
+    tickets-db-data:
