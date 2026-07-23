@@ -1,0 +1,50 @@
+{
+  "family": "dolibarr-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/LabRole",
+  "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/LabRole",
+  "containerDefinitions": [
+    {
+      "name": "dolibarr-app",
+      "image": "${IMAGE_URI}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost/ || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "environment": [
+        { "name": "DOLI_DB_SERVER", "value": "${DOLI_DB_SERVER}" },
+        { "name": "DOLI_DB_PORT", "value": "${DOLI_DB_PORT}" },
+        { "name": "DOLI_DATABASE", "value": "${DOLI_DATABASE}" },
+        { "name": "DOLI_DB_USER", "value": "${DOLI_DB_USER}" },
+        { "name": "DOLI_DB_PASSWORD", "value": "${DOLI_DB_PASSWORD}" },
+        { "name": "DOLI_URL_ROOT", "value": "${DOLI_URL_ROOT}" },
+        { "name": "DOLI_ADMIN_LOGIN", "value": "${DOLI_ADMIN_LOGIN}" },
+        { "name": "DOLI_ADMIN_PASSWORD", "value": "${DOLI_ADMIN_PASSWORD}" },
+        { "name": "TICKETS_MICROSERVICE_URL_INTERNAL", "value": "${TICKETS_MICROSERVICE_URL_INTERNAL}" },
+        { "name": "TICKETS_MICROSERVICE_URL_PUBLIC", "value": "${TICKETS_MICROSERVICE_URL_PUBLIC}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "dolibarr-app",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
